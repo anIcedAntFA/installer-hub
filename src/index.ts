@@ -1,59 +1,92 @@
 import { Hono } from 'hono';
 
-// 1. Định nghĩa danh sách các tool và link raw tương ứng
-const TOOLS: Record<string, string> = {
-  gohome:
-    'https://raw.githubusercontent.com/anIcedAntFA/gohome/main/scripts/install.sh',
+// 1. Define the list of tools with their install script URLs
+interface ToolConfig {
+  repo: string; // e.g., "anIcedAntFA/gohome"
+  scriptPath: string; // e.g., "scripts/install.sh"
+}
+
+const TOOLS: Record<string, ToolConfig> = {
+  gohome: {
+    repo: 'anIcedAntFA/gohome',
+    scriptPath: 'scripts/install.sh',
+  },
 };
+
+const DEFAULT_DOMAIN = 'get.ngockhoi96.dev';
+const CACHE_TTL = 300; // 5 minutes
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
-// 2. Route trang chủ (get.ngockhoi96.dev) -> Hiển thị hướng dẫn
+// 2. Home page route -> Display usage instructions
 app.get('/', (c) => {
+  const domain = c.req.header('host') || DEFAULT_DOMAIN;
+
   const toolList = Object.keys(TOOLS)
-    .map((t) => `- curl get.ngockhoi96.dev/${t} | sh`)
+    .map((t) => `- curl -sSL ${domain}/${t} | bash`)
     .join('\n');
 
   return c.text(
-    `🚀 ngockhoi96 installer hub\n\nAvailable tools:\n${toolList}\n\nUsage:\n  curl get.ngockhoi96.dev/<tool_name> | sh`
+    `🚀 ngockhoi96 installer hub\n\nAvailable tools:\n${toolList}\n\nUsage:\n  curl -sSL ${domain}/<tool_name> | bash`
   );
 });
 
-// 3. Route xử lý từng tool (get.ngockhoi96.dev/:tool)
+// 3. Install script route - Fetch and cache from GitHub
 app.get('/:tool', async (c) => {
   const toolName = c.req.param('tool');
-  const targetURL = TOOLS[toolName];
+  const toolConfig = TOOLS[toolName];
 
-  // Nếu không tìm thấy tool trong danh sách
-  if (!targetURL) {
+  // Tool not found
+  if (!toolConfig) {
+    const domain = c.req.header('host') || DEFAULT_DOMAIN;
     return c.text(
-      `Error: Tool '${toolName}' not found.\nCheck get.ngockhoi96.dev for available tools.`,
+      `Error: Tool '${toolName}' not found.\n\nAvailable tools at: ${domain}`,
       404
     );
   }
 
-  try {
-    // Fetch nội dung script từ GitHub
-    const response = await fetch(targetURL);
+  const scriptURL = `https://raw.githubusercontent.com/${toolConfig.repo}/main/${toolConfig.scriptPath}`;
+  const cacheKey = new Request(scriptURL, c.req.raw);
 
-    if (!response.ok) {
-      return c.text(
-        `Error: Failed to fetch script from source (Status: ${response.status})`,
-        502
-      );
+  try {
+    // Try to get from cache first
+    const cache = caches.default;
+    let response = await cache.match(cacheKey);
+
+    if (!response) {
+      // Cache miss - fetch from GitHub
+      response = await fetch(scriptURL);
+
+      if (!response.ok) {
+        return c.text(
+          `Error: Failed to fetch script from GitHub (Status: ${response.status})`,
+          502
+        );
+      }
+
+      // Clone response for cache (can only read body once)
+      response = new Response(response.body, response);
+
+      // Set cache headers
+      response.headers.set('Cache-Control', `public, max-age=${CACHE_TTL}`);
+
+      // Store in Cloudflare cache
+      c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
     }
 
-    // Lấy nội dung script
-    const scriptContent = await response.text();
-
-    // Trả về script để curl có thể thực thi (pipe | sh)
-    return c.newResponse(scriptContent, 200, {
+    // Return script content
+    return c.newResponse(response.body, 200, {
       'Content-Type': 'text/plain; charset=utf-8',
-      // Cache ngắn hạn (ví dụ 1 phút) để đỡ spam GitHub nếu nhiều người tải cùng lúc
-      'Cache-Control': 'public, max-age=60',
+      'Cache-Control': `public, max-age=${CACHE_TTL}`,
+      'X-Cache-Status': response.headers.get('CF-Cache-Status') || 'WORKER',
     });
   } catch (error) {
-    return c.text('Internal Server Error: Unable to fetch the script.', 500);
+    return c.text(
+      `Internal Server Error: ${
+        error instanceof Error ? error.message : 'Unknown error'
+      }`,
+      500
+    );
   }
 });
 

@@ -2,12 +2,9 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "installer-hub",
   "main": "src/index.ts",
-  "compatibility_date": "2026-01-13"
-  // "compatibility_flags": [
-  //   "nodejs_compat"
-  // ],
+  "compatibility_date": "2026-01-13",
   // "vars": {
-  //   "MY_VAR": "my-variable"
+  //   "DOMAIN": "get.ngockhoi96.dev"
   // },
   // "kv_namespaces": [
   //   {
