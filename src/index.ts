@@ -19,69 +19,88 @@ const CACHE_TTL = 300; // 5 minutes
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 // 2. Home page route -> Display usage instructions
-app.get('/', (c) => {
-  const domain = c.req.header('host') || DEFAULT_DOMAIN;
+app.get('/', (ctx) => {
+  const domain = ctx.req.header('host') || DEFAULT_DOMAIN;
 
   const toolList = Object.keys(TOOLS)
     .map((t) => `- curl -sSL ${domain}/${t} | bash`)
     .join('\n');
 
-  return c.text(
+  return ctx.text(
     `🚀 ngockhoi96 installer hub\n\nAvailable tools:\n${toolList}\n\nUsage:\n  curl -sSL ${domain}/<tool_name> | bash`
   );
 });
 
 // 3. Install script route - Fetch and cache from GitHub
-app.get('/:tool', async (c) => {
-  const toolName = c.req.param('tool');
+app.get('/:tool', async (ctx) => {
+  const toolName = ctx.req.param('tool');
   const toolConfig = TOOLS[toolName];
 
   // Tool not found
   if (!toolConfig) {
-    const domain = c.req.header('host') || DEFAULT_DOMAIN;
-    return c.text(
+    const domain = ctx.req.header('host') || DEFAULT_DOMAIN;
+    return ctx.text(
       `Error: Tool '${toolName}' not found.\n\nAvailable tools at: ${domain}`,
       404
     );
   }
 
   const scriptURL = `https://raw.githubusercontent.com/${toolConfig.repo}/main/${toolConfig.scriptPath}`;
-  const cacheKey = new Request(scriptURL, c.req.raw);
+
+  // Create a consistent cache key (no varying headers)
+  const cacheKey = new Request(scriptURL, {
+    method: 'GET',
+  });
 
   try {
     // Try to get from cache first
     const cache = caches.default;
     let response = await cache.match(cacheKey);
+    let cacheStatus = 'MISS';
 
-    if (!response) {
-      // Cache miss - fetch from GitHub
-      response = await fetch(scriptURL);
+    if (response) {
+      // Cache hit
+      cacheStatus = 'HIT';
+    } else {
+      // Cache miss - fetch from GitHub with Cloudflare cache options
+      response = await fetch(scriptURL, {
+        cf: {
+          cacheTtl: CACHE_TTL,
+          cacheEverything: true,
+        },
+      });
 
       if (!response.ok) {
-        return c.text(
+        return ctx.text(
           `Error: Failed to fetch script from GitHub (Status: ${response.status})`,
           502
         );
       }
 
-      // Clone response for cache (can only read body once)
-      response = new Response(response.body, response);
+      // Create a new response with proper cache headers
+      response = new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': `public, max-age=${CACHE_TTL}`,
+          'X-Content-Source': 'github',
+        },
+      });
 
-      // Set cache headers
-      response.headers.set('Cache-Control', `public, max-age=${CACHE_TTL}`);
-
-      // Store in Cloudflare cache
-      c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+      // Store in Cloudflare cache (async, don't block response)
+      ctx.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
     }
 
-    // Return script content
-    return c.newResponse(response.body, 200, {
+    // Return script content with cache status
+    return ctx.newResponse(response.body, 200, {
       'Content-Type': 'text/plain; charset=utf-8',
       'Cache-Control': `public, max-age=${CACHE_TTL}`,
-      'X-Cache-Status': response.headers.get('CF-Cache-Status') || 'WORKER',
+      'X-Cache-Status': cacheStatus,
+      'X-Worker-Version': '1.0.0',
     });
   } catch (error) {
-    return c.text(
+    return ctx.text(
       `Internal Server Error: ${
         error instanceof Error ? error.message : 'Unknown error'
       }`,
