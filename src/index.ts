@@ -61,7 +61,18 @@ app.get('/:tool', async (ctx) => {
     if (response) {
       // Cache hit
       cacheStatus = 'HIT';
+      console.log(
+        `[${cacheStatus}] ${toolName} - User-Agent: ${ctx.req.header(
+          'user-agent'
+        )} - IP: ${ctx.req.header('cf-connecting-ip')}`
+      );
     } else {
+      cacheStatus = 'MISS';
+      console.log(
+        `[${cacheStatus}] ${toolName} - User-Agent: ${ctx.req.header(
+          'user-agent'
+        )} - IP: ${ctx.req.header('cf-connecting-ip')}`
+      );
       // Cache miss - fetch from GitHub with Cloudflare cache options
       response = await fetch(scriptURL, {
         cf: {
