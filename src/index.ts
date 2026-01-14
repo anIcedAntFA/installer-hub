@@ -73,13 +73,22 @@ app.get('/:tool', async (ctx) => {
           'user-agent'
         )} - IP: ${ctx.req.header('cf-connecting-ip')}`
       );
+
       // Cache miss - fetch from GitHub with Cloudflare cache options
+      const fetchStart = Date.now();
+      console.log(`🔔 [SUBREQUEST] Fetching from GitHub: ${scriptURL}`);
+
       response = await fetch(scriptURL, {
         cf: {
           cacheTtl: CACHE_TTL,
           cacheEverything: true,
         },
       });
+
+      const fetchDuration = Date.now() - fetchStart;
+      console.log(
+        `🔔 [SUBREQUEST] GitHub responded: ${response.status} in ${fetchDuration}ms`
+      );
 
       if (!response.ok) {
         return ctx.text(
